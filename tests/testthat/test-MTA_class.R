@@ -13,3 +13,14 @@ test_that("MTA initializes correctly with SNP parameters", {
   expect_equal(mta$alleles, c("G", "T"))
   expect_equal(mta$loc_tag_pos, 16)
 })
+
+# test_that("MTA seek homolog loci", {
+#   mta <- MTA$new(
+#     alleleID = "120515446-16-G/T",
+#     alleleSequence = "TGCAGAGGAAGAATCATGGGTTAGCTTGTTCAAATCTTCGGGTAACTAAACAAATAAAACGACTTGTGC",
+#     favorableAllele = "T"
+#   )
+#
+#   dartset <- DArTSet$new(dataset = readRDS(testthat::test_path("data", "gl_base.RDS")))
+#   print(mta$find_homologs(dartset))
+# })

@@ -46,27 +46,44 @@ MTA <- R6::R6Class(
       private$validate_allele()
     },
 
-    find_homolog = function() {
-
-    }
-
-
-    #' Print function
+    #' @description
+    #' Find homologous loci in a `DArTSet` for the current MTA.
     #'
-    #' @param ...
+    #' Uses Hamming distance between the MTA allele sequence and each sequence
+    #' in `dartset$db`. For SNP MTAs, candidate loci are further filtered to
+    #' keep only those matching the SNP position.
     #'
-    #' @return a printout of the MTA object
-    #' @export
+    #' @param dartset A `DArTSet` object used as search space for homologs.
+    #' @param min_distance Maximum Hamming distance allowed for a sequence to be
+    #'   considered homologous.
     #'
-    #' @examples print(MTA)
-    print = function(...) {
-      cat("MTA Object\n")
-      cat("Allele ID:", self$alleleID, "\n")
-      cat("Allele Sequence:", self$alleleSequence, "\n")
-      cat("Favorable Allele:", self$favorableAllele, "\n")
-      cat("MTA Type:", self$mtaType, "\n")
-      cat("Locus tag pos:", self$loc_tag_pos, "\n")
-      cat("Alleles:", paste(self$alleles, collapse = ", "), "\n")
+    #' @return A named numeric vector of Hamming distances for matching loci, or
+    #'   `NA` when no homolog is found.
+    find_homologs = function(dartset, min_distance = 5) {
+      # get the distances of all tag against MTA tag
+      distances <- purrr::map_int(dartset$db,
+                                  ~ private$hamming_str(as.character(.x)))
+      # select which tags hold a distance below cutoff
+      hom_idx <- which(distances <= min_distance)
+      hom_names <- dartset$locNames[hom_idx]
+      # if MTA is a SNP consider only those where the snp pos in tag matches
+      if (self$mtaType == "SNP") {
+        possible_snp_pos <- as.numeric(stringr::str_split(hom_names, "-", simplify = T)[,2])
+        pos_match_idx <- which(possible_snp_pos %in% self$loc_tag_pos)
+
+        if (length(pos_match_idx) == 0) {
+          return(NA)
+        }
+
+        match_names <- hom_names[pos_match_idx]
+        match_idx <- which(dartset$locNames %in% match_names)
+        match_dist <- distances[match_idx]
+        names(match_dist) <- match_names
+      } else {
+        match_dist <- distances[hom_idx]
+        names(match_dist) <- hom_names
+      }
+      return(match_dist)
     }
   ),
 
@@ -117,10 +134,5 @@ MTA <- R6::R6Class(
         }
       }
     }
-
-    hamming_str = function(tag) {
-      if (is.na(tag)) return(NA_integer_)
-    }
-
   )
 )

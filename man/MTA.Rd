@@ -18,12 +18,6 @@ Represent all metadata of a marker trait association
    favorableAllele = "T"
  )
 
-
-## ------------------------------------------------
-## Method `MTA$print`
-## ------------------------------------------------
-
-print(MTA)
 }
 \section{Public fields}{
 \if{html}{\out{<div class="r6-fields">}}
@@ -46,7 +40,7 @@ print(MTA)
 \subsection{Public methods}{
 \itemize{
 \item \href{#method-MTA-new}{\code{MTA$new()}}
-\item \href{#method-MTA-print}{\code{MTA$print()}}
+\item \href{#method-MTA-find_homologs}{\code{MTA$find_homologs()}}
 \item \href{#method-MTA-clone}{\code{MTA$clone()}}
 }
 }
@@ -75,31 +69,32 @@ a new MTA object
 }
 }
 \if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-MTA-print"></a>}}
-\if{latex}{\out{\hypertarget{method-MTA-print}{}}}
-\subsection{Method \code{print()}}{
+\if{html}{\out{<a id="method-MTA-find_homologs"></a>}}
+\if{latex}{\out{\hypertarget{method-MTA-find_homologs}{}}}
+\subsection{Method \code{find_homologs()}}{
+Find homologous loci in a \code{DArTSet} for the current MTA.
+
+Uses Hamming distance between the MTA allele sequence and each sequence
+in \code{dartset$db}. For SNP MTAs, candidate loci are further filtered to
+keep only those matching the SNP position.
 \subsection{Usage}{
-\if{html}{\out{<div class="r">}}\preformatted{MTA$print(...)}\if{html}{\out{</div>}}
+\if{html}{\out{<div class="r">}}\preformatted{MTA$find_homologs(dartset, min_distance = 5)}\if{html}{\out{</div>}}
 }
 
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{...}}{}
+\item{\code{dartset}}{A \code{DArTSet} object used as search space for homologs.}
+
+\item{\code{min_distance}}{Maximum Hamming distance allowed for a sequence to be
+considered homologous.}
 }
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
-a printout of the MTA object
+A named numeric vector of Hamming distances for matching loci, or
+\code{NA} when no homolog is found.
 }
-\subsection{Examples}{
-\if{html}{\out{<div class="r example copy">}}
-\preformatted{print(MTA)
-}
-\if{html}{\out{</div>}}
-
-}
-
 }
 \if{html}{\out{<hr>}}
 \if{html}{\out{<a id="method-MTA-clone"></a>}}
