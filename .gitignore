@@ -1,1 +1,12 @@
 .Rproj.user
+.positai
+tests/Pv21.fa
+tests/Pv21.fa.gz
+ref/index/1/chr1-2_index_k13_c2_b1.block2.gz
+ref/index/1/chr1-2_index_k13_c2_b1.block
+ref/genome/1/summary.txt
+ref/genome/1/scaffolds.txt.gz
+ref/genome/1/info.txt
+ref/genome/1/chr2.chrom.gz
+ref/genome/1/chr1.chrom.gz
+.Rhistory

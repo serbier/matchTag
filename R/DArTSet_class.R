@@ -11,20 +11,32 @@ DArTSet <- R6::R6Class(
     locNames = NULL,
     #' @field indNames A character vector containing the names of the individuals in the dataset.
     indNames = NULL,
+    #' @field ref Path to reference fasta file where loci will be alligned
+    ref = NULL,
     #' @field db A character vector containing the tag sequences in the dataset
     db = NULL,
-
+    #' @field temp_dir A character string containing the path to the temporary directory.
+    temp_dir = NULL,
+    #' @field aligments A dataframe with mapping metadata for each tag
+    aligments = NULL,
 
     #' @description
     #' Create a new DArTSet object.
     #' @param dataset A DArTSet object containing the data and metadata for the DArT analysis.
     #' @return A new DArTSet object.
     #' @export
-    initialize = function(dataset) {
+    initialize = function(dataset, ref = NULL) {
       self$dataset <- dataset
       self$locNames <- adegenet::locNames(self$dataset)
       self$indNames <- adegenet::indNames(self$dataset)
       self$db <- self$build_db()
+      self$temp_dir <- private$create_temp_dir()
+
+      if(!is.null(ref)) {
+        self$ref <- ref
+      }
+      # Useful for join mappings with tags
+      self$dataset@other$loc.metrics$loc_id <- self$locNames
     },
 
     #' @description
@@ -37,8 +49,9 @@ DArTSet <- R6::R6Class(
     build_db = function() {
       mat <- do.call(rbind,
                      strsplit(as.vector(self$dataset@other$loc.metrics$AlleleSequence), ""))
-      rownames(mat) <- self$lodNames
-      return(ape::as.DNAbin(mat))
+      db <- ape::as.DNAbin(mat)
+      rownames(db) <- self$locNames
+      return(db)
     },
 
     #' @description
@@ -103,10 +116,41 @@ DArTSet <- R6::R6Class(
       names(freqs) <- imta$alleles
       return(freqs[favorable_allele])
 
+    },
+    map_tags2ref = function(bbmap_dir, memory = "4g", threads = 4) {
+      cp_dir <- file.path(bbmap_dir, "current/")
+
+      # Create fasta file with tags
+      private$get_tagfasta()
+      in_fasta <- file.path(self$temp_dir, "tags.fa")
+      out_sam <- file.path(self$temp_dir, "aligments.sam")
+      args <- c(
+        paste0("-Xmx", memory),
+        "-ea",
+        "-cp", normalizePath(cp_dir, winslash = "\\", mustWork = TRUE),
+        "align2.BBMap",
+        paste0("in=", normalizePath(in_fasta, winslash = "\\", mustWork = TRUE)),
+        paste0("out=", normalizePath(out_sam, winslash = "\\", mustWork = FALSE)),
+        paste0("ref=", normalizePath(self$ref, winslash = "\\", mustWork = TRUE)),
+        paste0("sam=", "1.3"),
+        paste0("ambiguous=", "toss"),
+        paste0("threads=", threads)
+      )
+
+      status <- system2("java", args)
+
+      if (!identical(status, 0L)) {
+        stop("BBDuk failed with exit status: ", status, call. = FALSE)
+      }
+      return(private$read_sam(min_mapq = 20))
     }
 
   ),
   private = list(
+    create_temp_dir = function() {
+      path <- tempdir()
+      return(path)
+    },
     get_loc_idx = function(alleleID) {
       idx <- which(self$locNames == alleleID)
       if (length(idx) == 0) {
@@ -125,6 +169,110 @@ DArTSet <- R6::R6Class(
                             byrow = TRUE))
       names(d) <- self$locNames
       return(sort(d, decreasing = T))
+    },
+
+    get_tagfasta = function() {
+      tag_path <- file.path(self$temp_dir, "tags.fa")
+      ape::write.FASTA(self$db, tag_path)
+      if (file.exists(tag_path)) {
+        cli::cli_inform("Tags fasta was created in {tag_path}")
+      } else {
+        cli::cli_abort("Failed to create tags fasta file at {tag_path}")
+      }
+    },
+
+    read_sam = function(min_mapq = 20) {
+      sam_df <- read.delim(
+        file.path(self$temp_dir, "aligments.sam"),
+        comment.char = "@",
+        header = FALSE,
+        stringsAsFactors = FALSE
+      )
+
+      names(sam_df)[1:13] <- c(
+        "qname", "flag", "rname", "pos", "mapq", "cigar",
+        "rnext", "pnext", "tlen", "seq", "qual", "NM", "AM"
+      )
+
+      filt_map <- sam_df %>%
+        dplyr::filter(mapq >= min_mapq)
+
+      join_tab <- base::merge(self$dataset@other$loc.metrics, filt_map, by.x = "loc_id",
+                              by.y = "qname", all.x = T) %>%
+        dplyr::mutate(allele_test = stringr::str_sub(AlleleSequence, SnpPosition+1, SnpPosition+1),
+               query_len = stringr::str_count(AlleleSequence)
+        )
+
+      pred_positions <- purrr::pmap(list(join_tab$cigar,join_tab$flag,
+                                         join_tab$query_len, join_tab$pos,
+                                         join_tab$SnpPosition,
+                                         join_tab$AlleleID), private$query2ref)
+      vec_positions <- purrr::map_vec(pred_positions, ~ifelse(is.null(.x), NA, .x))
+      join_tab$snp_position  <-  vec_positions
+      self$aligments <- join_tab
+      self$dataset@chromosome <- as.factor(join_tab$rname)
+      self$dataset@position <- as.integer(join_tab$snp_position)
+    },
+
+    query2ref = function(cigar, flags, query_len, ref_start, target_query_pos, alleleID){
+      # Convert zero pos to 1 based pos
+      target_query_pos  <- target_query_pos  + 1
+      # Parse CIGAR string into lengths and operations
+      cigar_tuples <- unlist(regmatches(cigar, gregexpr("\\d+[MIDNSH]", cigar)))
+      # Initialize Positions
+      q_pos  <- 0
+      r_pos  <- ref_start - 1
+      if(!is.na(flags)){
+        # If tag is mapped reverse
+        if(flags == 16){
+          target_query_pos  <- query_len - target_query_pos + 1
+          cigar_tuples  <- rev(cigar_tuples)
+        }
+      }
+      # Loop over parsed CIGAR elements
+      for (element in cigar_tuples){
+        len  <- as.numeric(gsub("[MIDNSH]", "", element))
+        op  <- gsub("\\d+", "", element)
+        switch(op,
+               M = {
+                 if(q_pos + len >= target_query_pos){
+                   return(r_pos + (target_query_pos - q_pos))
+                 } else {
+                   q_pos  <- q_pos + len
+                   r_pos  <- r_pos + len
+                 }
+               },
+               I = {
+                 if(q_pos + len >= target_query_pos){
+                   cli::cli_warn("Target Position located over an insertion, reporting left most pos: {alleleID}")
+                   return(r_pos)
+                 } else {
+                   q_pos  <- q_pos + len
+                 }
+               },
+               D = {
+                 r_pos  <- r_pos + len
+               },
+               N = {
+                 r_pos  <- r_pos + len
+               },
+               S = {
+                 if(q_pos + len >= target_query_pos){
+                   cli::cli_warn("Target Position located over an softclip, reporting left most pos {alleleID}")
+                   return(r_pos)
+                 } else {
+                   q_pos  <- q_pos + len
+                 }
+               },
+               H = {
+                 cli::cli_warn("Found a hardclip not expected returning NA {alleleID}")
+                 return(NA)
+               },
+
+               cli::cli_abort('Position not found in the alignment {alleleID}')
+        )
+      }
     }
+
   )
 )
