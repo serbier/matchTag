@@ -5,6 +5,8 @@
 DArTSet <- R6::R6Class(
   "DArTSet",
   public = list(
+    #'@field dataset_type A character indicating if the DArTSeq type
+    dataset_type = "NULL",
     #'@field dataset A DArTSet object containing the data and metadata for the DArT analysis.
     dataset = NULL,
     #' @field locNames A character vector containing the names of the loci in the dataset.
@@ -23,10 +25,13 @@ DArTSet <- R6::R6Class(
     #' @description
     #' Create a new DArTSet object.
     #' @param dataset A DArTSet object containing the data and metadata for the DArT analysis.
-    #' @return A new DArTSet object.
+    #' @param dataset_type A character indicating if is "SNP" or "SIL" dataset (SNP, default).
+    #' @param ref Path to a uncompressed fasta file where loci tags will be aligned.
+    #' @return A DArTSet object.
     #' @export
-    initialize = function(dataset, ref = NULL) {
+    initialize = function(dataset, dataset_type = "SNP", ref = NULL) {
       self$dataset <- dataset
+      self$dataset_type = dataset_type
       self$locNames <- adegenet::locNames(self$dataset)
       self$indNames <- adegenet::indNames(self$dataset)
       self$db <- self$build_db()
@@ -110,33 +115,33 @@ DArTSet <- R6::R6Class(
         stop(paste("Favorable allele", favorable_allele,
                    "not found in the dataset for alleleID", alleleID))
       }
-      freq_alt <- as.vector(adegenet::glMean(sgl))
-      freq_ref <- 1 - freq_alt
-      freqs <- c(freq_ref, freq_alt)
-      names(freqs) <- imta$alleles
+      freqs <- as.vector(unlist(round(gl.alf(sgl)[1,], 6)))
+      names(freqs) <- as.character(imta$alleles)
       return(freqs[favorable_allele])
 
     },
-    map_tags2ref = function(bbmap_dir, memory = "4g", threads = 4) {
+    map_tags2ref = function(bbmap_dir, memory = "4g", use_index = T, threads = 4) {
       cp_dir <- file.path(bbmap_dir, "current/")
 
       # Create fasta file with tags
       private$get_tagfasta()
       in_fasta <- file.path(self$temp_dir, "tags.fa")
       out_sam <- file.path(self$temp_dir, "aligments.sam")
+      idx_flag <- ifelse(use_index, "f", "t")
       args <- c(
         paste0("-Xmx", memory),
-        "-ea",
-        "-cp", normalizePath(cp_dir, winslash = "\\", mustWork = TRUE),
+        "-cp",
+        private$quote_arg(private$norm_win(cp_dir, mustWork = TRUE)),
         "align2.BBMap",
-        paste0("in=", normalizePath(in_fasta, winslash = "\\", mustWork = TRUE)),
-        paste0("out=", normalizePath(out_sam, winslash = "\\", mustWork = FALSE)),
-        paste0("ref=", normalizePath(self$ref, winslash = "\\", mustWork = TRUE)),
-        paste0("sam=", "1.3"),
-        paste0("ambiguous=", "toss"),
+        paste0("in=",  private$quote_arg(private$norm_win(in_fasta, mustWork = TRUE))),
+        paste0("out=", private$quote_arg(private$norm_win(out_sam, mustWork = FALSE))),
+        paste0("ref=", private$quote_arg(private$norm_win(self$ref, mustWork = TRUE))),
+        "sam=1.3",
+        "ambiguous=toss",
+        paste0("rebuild=", idx_flag),
         paste0("threads=", threads)
       )
-
+      print(args)
       status <- system2("java", args)
 
       if (!identical(status, 0L)) {
@@ -181,6 +186,14 @@ DArTSet <- R6::R6Class(
       }
     },
 
+    norm_win = function(x, mustWork = TRUE) {
+      normalizePath(x, winslash = "\\", mustWork = mustWork)
+    },
+
+    quote_arg = function(x) {
+      shQuote(x, type = "cmd")
+    },
+
     read_sam = function(min_mapq = 20) {
       sam_df <- read.delim(
         file.path(self$temp_dir, "aligments.sam"),
@@ -198,15 +211,23 @@ DArTSet <- R6::R6Class(
         dplyr::filter(mapq >= min_mapq)
 
       join_tab <- base::merge(self$dataset@other$loc.metrics, filt_map, by.x = "loc_id",
-                              by.y = "qname", all.x = T) %>%
+                              by.y = "qname", all.x = T)
+
+      if (self$dataset_type == "SNP"){
+        join_tab <- join_tab %>%
         dplyr::mutate(allele_test = stringr::str_sub(AlleleSequence, SnpPosition+1, SnpPosition+1),
-               query_len = stringr::str_count(AlleleSequence)
-        )
+               query_len = stringr::str_count(AlleleSequence))
+      } else {
+        join_tab <- join_tab %>%
+        dplyr::mutate(SnpPosition = 1,
+              allele_test = stringr::str_sub(AlleleSequence, SnpPosition+1, SnpPosition+1),
+               query_len = stringr::str_count(AlleleSequence))
+      }
 
       pred_positions <- purrr::pmap(list(join_tab$cigar,join_tab$flag,
                                          join_tab$query_len, join_tab$pos,
                                          join_tab$SnpPosition,
-                                         join_tab$AlleleID), private$query2ref)
+                                         join_tab$loc_id), private$query2ref)
       vec_positions <- purrr::map_vec(pred_positions, ~ifelse(is.null(.x), NA, .x))
       join_tab$snp_position  <-  vec_positions
       self$aligments <- join_tab
