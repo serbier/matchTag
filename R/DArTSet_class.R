@@ -1,37 +1,46 @@
 #' DArTSet class
 #'
-#' Represent a DArTSeq dataset of SNPs or SIL
+#' Represent a DArTSeq dataset of SNPs or SIL here are implemented 
+#' methods to map the tags to a reference, find homologous loci and 
+#' get allele frequencies.
 #' @export
 DArTSet <- R6::R6Class(
   "DArTSet",
   public = list(
     #'@field dataset_type A character indicating if the DArTSeq type
-    dataset_type = "NULL",
-    #'@field dataset A DArTSet object containing the data and metadata for the DArT analysis.
+    dataset_type = NULL,
+    #'@field dataset A DArTSet object containing the data and metadata
+    #' for the DArT analysis.
     dataset = NULL,
-    #' @field locNames A character vector containing the names of the loci in the dataset.
+    #' @field locNames A character vector containing the names of the loci
+    #' in the dataset.
     locNames = NULL,
-    #' @field indNames A character vector containing the names of the individuals in the dataset.
+    #' @field indNames A character vector containing the names of the
+    #' individuals in the dataset.
     indNames = NULL,
-    #' @field ref Path to reference fasta file where loci will be alligned
+    #' @field ref Path to reference fasta file where loci will be aligned
     ref = NULL,
     #' @field db A character vector containing the tag sequences in the dataset
     db = NULL,
-    #' @field temp_dir A character string containing the path to the temporary directory.
+    #' @field temp_dir A character string containing the path to the
+    #' temporary directory.
     temp_dir = NULL,
     #' @field aligments A dataframe with mapping metadata for each tag
     aligments = NULL,
 
     #' @description
     #' Create a new DArTSet object.
-    #' @param dataset A DArTSet object containing the data and metadata for the DArT analysis.
-    #' @param dataset_type A character indicating if is "SNP" or "SIL" dataset (SNP, default).
-    #' @param ref Path to a uncompressed fasta file where loci tags will be aligned.
+    #' @param dataset A DArTSet object containing the data and metadata
+    #' for the DArT analysis.
+    #' @param dataset_type A character indicating if is "SNP" or
+    #' "SIL" dataset (SNP, default).
+    #' @param ref Path to a uncompressed fasta file where loci tags
+    #' will be aligned.
     #' @return A DArTSet object.
     #' @export
     initialize = function(dataset, dataset_type = "SNP", ref = NULL) {
       self$dataset <- dataset
-      self$dataset_type = dataset_type
+      self$dataset_type <- dataset_type
       self$locNames <- adegenet::locNames(self$dataset)
       self$indNames <- adegenet::indNames(self$dataset)
       self$db <- self$build_db()
@@ -53,7 +62,8 @@ DArTSet <- R6::R6Class(
     #' @return A `DNAbin` object containing one aligned sequence per locus.
     build_db = function() {
       mat <- do.call(rbind,
-                     strsplit(as.vector(self$dataset@other$loc.metrics$AlleleSequence), ""))
+                    strsplit(as.vector(
+                      self$dataset@other$loc.metrics$AlleleSequence), ""))
       db <- ape::as.DNAbin(mat)
       rownames(db) <- self$locNames
       return(db)
@@ -79,7 +89,8 @@ DArTSet <- R6::R6Class(
         matches <- d[match_idx]
         hom_names <- names(matches)
         if (mta$mtaType == "SNP") {
-          possible_snp_pos <- as.numeric(stringr::str_split(hom_names, "-", simplify = T)[,2])
+          possible_snp_pos <- as.numeric(stringr::str_split(hom_names,
+           "-", simplify = T)[,2])
           pos_match_idx <- which(possible_snp_pos %in% mta$loc_tag_pos)
           match_names <- hom_names[pos_match_idx]
           if (length(match_names) > 0){
@@ -105,6 +116,7 @@ DArTSet <- R6::R6Class(
     #'
     #' @return Numeric scalar with the favorable allele frequency.
     get_favourable_freq = function(alleleID, favorable_allele) {
+      favorable_allele <- as.character(favorable_allele)
       idx <- private$get_loc_idx(alleleID)
       sgl <- self$dataset[,idx]
 
@@ -115,14 +127,32 @@ DArTSet <- R6::R6Class(
         stop(paste("Favorable allele", favorable_allele,
                    "not found in the dataset for alleleID", alleleID))
       }
-      freqs <- as.vector(unlist(round(gl.alf(sgl)[1,], 6)))
+      if (self$dataset_type == "SIL") {
+        abs_freq <- colSums(is.na(as.matrix(sgl)))/length(self$indNames)
+        pres_freq <- 1-abs_freq
+        freqs <- c(abs_freq, pres_freq)
+      } else {
+        freqs <- as.vector(unlist(round(dartR.base::gl.alf(sgl)[1,], 6)))
+      }
       names(freqs) <- as.character(imta$alleles)
       return(freqs[favorable_allele])
 
     },
-    map_tags2ref = function(bbmap_dir, memory = "4g", use_index = T, threads = 4) {
-      cp_dir <- file.path(bbmap_dir, "current/")
 
+    #' @description
+    #' Map the loci tags to a reference genome using BBmap. SAM file is parsed
+    #' and using CIGAR string is inferred the position of the locus
+    #' relative to reference.
+    #'
+    #' @param bbmap_dir Directory containing BBmap binaries.
+    #' @param memory Amount of memory to allocate to Java (e.g., "4g").
+    #' @param use_index Logical indicating whether to use an existing index.
+    #' @param threads Number of threads to use for mapping.
+    #'
+    #' @return A data frame with mapping metadata for each tag, stored in `self$aligments`.
+    map_tags2ref = function(bbmap_dir, memory = "4g", use_index = T, threads = 4) {
+      # Subfolder inside BBtools where BBmap module is located.
+      cp_dir <- file.path(bbmap_dir, "current/")
       # Create fasta file with tags
       private$get_tagfasta()
       in_fasta <- file.path(self$temp_dir, "tags.fa")
@@ -145,17 +175,24 @@ DArTSet <- R6::R6Class(
       status <- system2("java", args)
 
       if (!identical(status, 0L)) {
-        stop("BBDuk failed with exit status: ", status, call. = FALSE)
+        stop("BBMap failed with exit status: ", status, call. = FALSE)
       }
-      return(private$read_sam(min_mapq = 20))
+      private$read_sam(min_mapq = 20)
     }
 
   ),
   private = list(
+    #' @description
+    #' Create a temporary directory for intermediate files during mapping.
+    #' @return A character string with the path to the temporary directory.
     create_temp_dir = function() {
       path <- tempdir()
       return(path)
     },
+    #' @description
+    #' Get the index of a locus in `locNames` by its identifier.
+    #' @param alleleID Marker identifier to search for.
+    #' @return Numeric index of the locus in `locNames`, or `NA` if not found.
     get_loc_idx = function(alleleID) {
       idx <- which(self$locNames == alleleID)
       if (length(idx) == 0) {
@@ -165,6 +202,10 @@ DArTSet <- R6::R6Class(
         return(idx)
       }
     },
+    #' @description
+    #' Compute Hamming distance between a query sequence and all sequences in the database.
+    #' @param query A character string with the query sequence.
+    #' @return A named numeric vector of Hamming distances, sorted in decreasing order.
     hamming_dnabin = function(query) {
       qnn <- ape::as.DNAbin(unlist(strsplit(query, "")))
       qnn_raw <- as.raw(qnn)
@@ -175,7 +216,8 @@ DArTSet <- R6::R6Class(
       names(d) <- self$locNames
       return(sort(d, decreasing = T))
     },
-
+    #' @description
+    #' Create a FASTA file with the tag sequences from the internal database.
     get_tagfasta = function() {
       tag_path <- file.path(self$temp_dir, "tags.fa")
       ape::write.FASTA(self$db, tag_path)
@@ -185,15 +227,27 @@ DArTSet <- R6::R6Class(
         cli::cli_abort("Failed to create tags fasta file at {tag_path}")
       }
     },
-
+    #' @description
+    #' Normalize file paths for Windows compatibility.
+    #' @param x A character string with the file path to normalize.
+    #' @param mustWork Logical indicating whether the path must exist.
+    #' @return A normalized file path string.
     norm_win = function(x, mustWork = TRUE) {
       normalizePath(x, winslash = "\\", mustWork = mustWork)
     },
-
+    #' @description
+    #' Quote a string for safe use in command-line arguments.
+    #' @param x A character string to quote.
+    #' @return A quoted character string.
     quote_arg = function(x) {
       shQuote(x, type = "cmd")
     },
-
+    #' @description
+    #' Read the SAM file, filter alignments by mapping quality, and put in the
+    #' same datarame mapping and tag metadata. Using query2ref methold is inferred
+    #' the position of the locus relative to reference.
+    #' @param min_mapq Minimum mapping quality to filter alignments.
+    #' @return None. Updates `self$aligments` with the processed data.
     read_sam = function(min_mapq = 20) {
       sam_df <- read.delim(
         file.path(self$temp_dir, "aligments.sam"),
@@ -210,31 +264,40 @@ DArTSet <- R6::R6Class(
       filt_map <- sam_df %>%
         dplyr::filter(mapq >= min_mapq)
 
-      join_tab <- base::merge(self$dataset@other$loc.metrics, filt_map, by.x = "loc_id",
+      join_tab <- base::merge(self$dataset@other$loc.metrics,
+                              filt_map, by.x = "loc_id",
                               by.y = "qname", all.x = T)
 
       if (self$dataset_type == "SNP"){
         join_tab <- join_tab %>%
-        dplyr::mutate(allele_test = stringr::str_sub(AlleleSequence, SnpPosition+1, SnpPosition+1),
-               query_len = stringr::str_count(AlleleSequence))
+        dplyr::mutate(allele_test = stringr::str_sub(AlleleSequence,
+              SnpPosition+1, SnpPosition+1),
+              query_len = stringr::str_count(AlleleSequence))
       } else {
         join_tab <- join_tab %>%
         dplyr::mutate(SnpPosition = 1,
-              allele_test = stringr::str_sub(AlleleSequence, SnpPosition+1, SnpPosition+1),
-               query_len = stringr::str_count(AlleleSequence))
+              allele_test = stringr::str_sub(AlleleSequence,
+              SnpPosition+1, SnpPosition+1),
+              query_len = stringr::str_count(AlleleSequence))
       }
 
       pred_positions <- purrr::pmap(list(join_tab$cigar,join_tab$flag,
                                          join_tab$query_len, join_tab$pos,
                                          join_tab$SnpPosition,
                                          join_tab$loc_id), private$query2ref)
-      vec_positions <- purrr::map_vec(pred_positions, ~ifelse(is.null(.x), NA, .x))
+      vec_positions <- purrr::map_vec(pred_positions,
+        ~ifelse(is.null(.x), NA, .x))
       join_tab$snp_position  <-  vec_positions
       self$aligments <- join_tab
       self$dataset@chromosome <- as.factor(join_tab$rname)
       self$dataset@position <- as.integer(join_tab$snp_position)
     },
-
+    #' @description
+    #' Infer the reference position of a query base from the CIGAR string.
+    #' Taking into account the mapping orientation is reversed the CIGAR string.
+    #' If the target position is located over an insertion or a softclip,
+    #' the leftmost reference position is reported with a warning.
+    #' If a hardclip is found, NA is returned with a warning.
     query2ref = function(cigar, flags, query_len, ref_start, target_query_pos, alleleID){
       # Convert zero pos to 1 based pos
       target_query_pos  <- target_query_pos  + 1
